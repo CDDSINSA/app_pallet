@@ -241,12 +241,15 @@ export async function capturePalletImage(result, config, options = {}) {
   const height = options.height ?? 660;
   const mimeType = options.mimeType ?? "image/jpeg";
   const quality = options.quality ?? 0.86;
-  const renderer = new THREE.WebGLRenderer({
+  const renderer = options.renderer ?? new THREE.WebGLRenderer({
     antialias: options.antialias ?? true,
     alpha: false,
     preserveDrawingBuffer: true,
   });
-  renderer.setPixelRatio(1);
+  
+  if (!options.renderer) {
+    renderer.setPixelRatio(1);
+  }
   renderer.setSize(width, height, false);
 
   const { scene, bounds } = createPalletScene(result, config, {
@@ -264,8 +267,13 @@ export async function capturePalletImage(result, config, options = {}) {
   const dataUrl = renderer.domElement.toDataURL(mimeType, quality);
 
   disposeObject(scene);
-  renderer.dispose();
-  renderer.forceContextLoss();
+  
+  if (!options.renderer) {
+    renderer.dispose();
+    renderer.forceContextLoss();
+  } else {
+    renderer.clear();
+  }
 
   return dataUrl;
 }

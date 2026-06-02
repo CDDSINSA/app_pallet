@@ -1,5 +1,6 @@
 import JSZip from "jszip";
 import { jsPDF } from "jspdf";
+import * as THREE from "three";
 import { buildSummaryWorkbook } from "./excelFiles.js";
 import { capturePalletImage } from "./threeScene.js";
 import { formatNumber, resultToSummaryRow } from "./palletLogic.js";
@@ -187,7 +188,7 @@ function drawDimensionPage(doc, result) {
   doc.text(`Unidades reportadas: ${Number.isFinite(item.unidades) ? formatNumber(item.unidades, 0) : "0"}`, margin, 594);
 }
 
-async function createSkuPdf(result, config) {
+async function createSkuPdf(result, config, options = {}) {
   const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
   const pageWidth = doc.internal.pageSize.getWidth();
   const margin = 42;
@@ -216,6 +217,7 @@ async function createSkuPdf(result, config) {
     showProductEdges: true,
     showSlats: true,
     cylinderSegments: 48,
+    renderer: options.sharedRenderer,
   });
   doc.addImage(image, "PNG", margin, 98, pageWidth - margin * 2, 292);
 
@@ -274,17 +276,33 @@ export async function createResultsZip(results, errors, config, options = {}) {
     label: "Resumen listo",
   });
 
-  for (const [index, result] of results.entries()) {
-    await emitProgress(onProgress, {
-      phase: "Generando PDFs",
-      current: index,
-      total: results.length,
-      percent: Math.round((index / Math.max(results.length, 1)) * 90) + 5,
-      label: `PDF ${index + 1} de ${results.length}: ${result.sku}`,
-    });
-    const pdfBuffer = await createSkuPdf(result, config);
-    zip.file(`${sanitizeFilename(result.sku)}.pdf`, pdfBuffer);
-    await yieldToBrowser();
+  const sharedRenderer = options.sharedRenderer || new THREE.WebGLRenderer({
+    antialias: true,
+    alpha: false,
+    preserveDrawingBuffer: true,
+  });
+  if (!options.sharedRenderer) {
+    sharedRenderer.setPixelRatio(1);
+  }
+
+  try {
+    for (const [index, result] of results.entries()) {
+      await emitProgress(onProgress, {
+        phase: "Generando PDFs",
+        current: index,
+        total: results.length,
+        percent: Math.round((index / Math.max(results.length, 1)) * 90) + 5,
+        label: `PDF ${index + 1} de ${results.length}: ${result.sku}`,
+      });
+      const pdfBuffer = await createSkuPdf(result, config, { sharedRenderer });
+      zip.file(`${sanitizeFilename(result.sku)}.pdf`, pdfBuffer);
+      await yieldToBrowser();
+    }
+  } finally {
+    if (!options.sharedRenderer) {
+      sharedRenderer.dispose();
+      sharedRenderer.forceContextLoss();
+    }
   }
 
   await emitProgress(onProgress, {
@@ -325,52 +343,65 @@ export async function createResultsZipChunks(results, errors, config, options = 
   const totalBatches = Math.ceil(results.length / chunkSize);
   const totalResults = results.length;
 
-  for (let batchIndex = 0; batchIndex < totalBatches; batchIndex += 1) {
-    const start = batchIndex * chunkSize;
-    const batchResults = results.slice(start, start + chunkSize);
-    const filename = getZipBatchName(batchIndex, batchResults, totalResults, chunkSize);
-    const batchErrors = batchIndex === 0 ? errors : [];
+  const sharedRenderer = new THREE.WebGLRenderer({
+    antialias: true,
+    alpha: false,
+    preserveDrawingBuffer: true,
+  });
+  sharedRenderer.setPixelRatio(1);
 
-    await emitProgress(onProgress, {
-      phase: `Lote ${batchIndex + 1} de ${totalBatches}`,
-      current: start,
-      total: totalResults,
-      percent: Math.round((start / Math.max(totalResults, 1)) * 100),
-      label: `Preparando ${filename}`,
-    });
+  try {
+    for (let batchIndex = 0; batchIndex < totalBatches; batchIndex += 1) {
+      const start = batchIndex * chunkSize;
+      const batchResults = results.slice(start, start + chunkSize);
+      const filename = getZipBatchName(batchIndex, batchResults, totalResults, chunkSize);
+      const batchErrors = batchIndex === 0 ? errors : [];
 
-    const blob = await createResultsZip(batchResults, batchErrors, config, {
-      onProgress: (batchProgress) => {
-        if (typeof onProgress !== "function") return;
-        const completedBeforeBatch = start / Math.max(totalResults, 1);
-        const currentBatchWeight = batchResults.length / Math.max(totalResults, 1);
-        const batchPercent = (batchProgress.percent ?? 0) / 100;
-        const percent = Math.round((completedBeforeBatch + currentBatchWeight * batchPercent) * 100);
+      await emitProgress(onProgress, {
+        phase: `Lote ${batchIndex + 1} de ${totalBatches}`,
+        current: start,
+        total: totalResults,
+        percent: Math.round((start / Math.max(totalResults, 1)) * 100),
+        label: `Preparando ${filename}`,
+      });
 
-        onProgress({
-          ...batchProgress,
-          phase: `Lote ${batchIndex + 1} de ${totalBatches}`,
-          current: Math.min(start + (batchProgress.current ?? 0), totalResults),
-          total: totalResults,
-          percent,
-          label: `${filename} - ${batchProgress.label}`,
-        });
-      },
-    });
+      const blob = await createResultsZip(batchResults, batchErrors, config, {
+        sharedRenderer,
+        onProgress: (batchProgress) => {
+          if (typeof onProgress !== "function") return;
+          const completedBeforeBatch = start / Math.max(totalResults, 1);
+          const currentBatchWeight = batchResults.length / Math.max(totalResults, 1);
+          const batchPercent = (batchProgress.percent ?? 0) / 100;
+          const percent = Math.round((completedBeforeBatch + currentBatchWeight * batchPercent) * 100);
 
-    if (typeof onChunkReady === "function") {
-      onChunkReady({ blob, filename, batchIndex, totalBatches });
+          onProgress({
+            ...batchProgress,
+            phase: `Lote ${batchIndex + 1} de ${totalBatches}`,
+            current: Math.min(start + (batchProgress.current ?? 0), totalResults),
+            total: totalResults,
+            percent,
+            label: `${filename} - ${batchProgress.label}`,
+          });
+        },
+      });
+
+      if (typeof onChunkReady === "function") {
+        onChunkReady({ blob, filename, batchIndex, totalBatches });
+      }
+
+      await emitProgress(onProgress, {
+        phase: `Lote ${batchIndex + 1} de ${totalBatches}`,
+        current: Math.min(start + batchResults.length, totalResults),
+        total: totalResults,
+        percent: Math.round(((start + batchResults.length) / Math.max(totalResults, 1)) * 100),
+        label: `${filename} descargado`,
+      });
+
+      await yieldToBrowser();
     }
-
-    await emitProgress(onProgress, {
-      phase: `Lote ${batchIndex + 1} de ${totalBatches}`,
-      current: Math.min(start + batchResults.length, totalResults),
-      total: totalResults,
-      percent: Math.round(((start + batchResults.length) / Math.max(totalResults, 1)) * 100),
-      label: `${filename} descargado`,
-    });
-
-    await yieldToBrowser();
+  } finally {
+    sharedRenderer.dispose();
+    sharedRenderer.forceContextLoss();
   }
 
   await emitProgress(onProgress, {

@@ -242,6 +242,39 @@ export default function App() {
     }
   }
 
+  async function handleDownloadExcel() {
+    if (!results.length || exporting) return;
+    setExporting(true);
+    setExportError("");
+    setExportProgress({
+      phase: "Preparando",
+      current: 0,
+      total: results.length,
+      percent: 0,
+      label: "Generando consolidado",
+    });
+    try {
+      const { buildSummaryWorkbook } = await import("./utils/excelFiles.js");
+      const { downloadBlob } = await import("./utils/exporters.js");
+      const buffer = await buildSummaryWorkbook(results, errors);
+      const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      downloadBlob(blob, "resumen_consolidado.xlsx");
+      setExportProgress({
+        phase: "Listo",
+        current: results.length,
+        total: results.length,
+        percent: 100,
+        label: "Excel descargado",
+      });
+      window.setTimeout(() => setExportProgress(null), 1800);
+    } catch (error) {
+      setExportError(error.message || "No se pudo generar el Excel.");
+      setExportProgress(null);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   function goToPrevious() {
     if (!results.length) return;
     setSelectedIndex((current) => (current - 1 + results.length) % results.length);
@@ -328,16 +361,28 @@ export default function App() {
               <p>Simulacion, validacion y salida consolidada</p>
             </div>
           </div>
-          <button
-            className="primary-button"
-            type="button"
-            onClick={handleDownloadZip}
-            disabled={!results.length || exporting}
-            title="Descargar resultados"
-          >
-            <Download size={18} aria-hidden="true" />
-            <span>{exporting ? "Generando ZIP" : "Descargar ZIP"}</span>
-          </button>
+          <div className="header-actions" style={{ display: 'flex', gap: '0.75rem' }}>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={handleDownloadExcel}
+              disabled={!results.length || exporting}
+              title="Descargar solo Excel"
+            >
+              <FileSpreadsheet size={18} aria-hidden="true" />
+              <span>{exporting ? "Generando Excel" : "Descargar Excel"}</span>
+            </button>
+            <button
+              className="primary-button"
+              type="button"
+              onClick={handleDownloadZip}
+              disabled={!results.length || exporting}
+              title="Descargar resultados"
+            >
+              <Download size={18} aria-hidden="true" />
+              <span>{exporting ? "Generando ZIP" : "Descargar ZIP"}</span>
+            </button>
+          </div>
         </header>
 
         <AlertList title="Revise la configuracion" items={processed.configErrors ?? []} />
