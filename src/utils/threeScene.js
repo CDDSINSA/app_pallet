@@ -267,10 +267,13 @@ export async function capturePalletImage(result, config, options = {}) {
   const dataUrl = renderer.domElement.toDataURL(mimeType, quality);
 
   disposeObject(scene);
+  renderer.renderLists?.dispose?.();
   
   if (!options.renderer) {
     renderer.dispose();
     renderer.forceContextLoss();
+    renderer.domElement.width = 0;
+    renderer.domElement.height = 0;
   } else {
     renderer.clear();
   }
