@@ -5,9 +5,11 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  FileText,
   FileSpreadsheet,
   Layers,
   PackageCheck,
+  Play,
   Rotate3D,
   Ruler,
   Upload,
@@ -24,6 +26,16 @@ import {
   validateConfig,
 } from "./utils/palletLogic.js";
 
+const EMPTY_MANUAL_FORM = {
+  sku: "",
+  tipo: "Caja",
+  largo: "",
+  ancho: "",
+  alto: "",
+  peso: "",
+  unidades: "",
+};
+
 function NumberField({ label, value, suffix, min = 0, step = "0.01", onChange }) {
   return (
     <label className="field">
@@ -37,6 +49,17 @@ function NumberField({ label, value, suffix, min = 0, step = "0.01", onChange })
           onChange={(event) => onChange(event.target.value === "" ? "" : Number(event.target.value))}
         />
         {suffix ? <em>{suffix}</em> : null}
+      </div>
+    </label>
+  );
+}
+
+function TextField({ label, value, onChange }) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <div className="input-wrap">
+        <input type="text" value={value} onChange={(event) => onChange(event.target.value)} />
       </div>
     </label>
   );
@@ -63,6 +86,65 @@ function MetricCard({ icon: Icon, label, value, detail }) {
         {detail ? <small>{detail}</small> : null}
       </div>
     </article>
+  );
+}
+
+function ManualSkuPanel({ form, result, errors, exporting, onChange, onSimulate, onExport }) {
+  return (
+    <section className="manual-panel">
+      <div className="manual-panel-head">
+        <div>
+          <h2>SKU manual</h2>
+          <p>{result ? `${result.sku} listo para visualizar y exportar` : "Captura individual"}</p>
+        </div>
+        {result ? (
+          <div className="manual-mini-stats">
+            <span>{formatNumber(result.metrics.totalUnits, 0)} unidades</span>
+            <span>{formatNumber(result.metrics.finalHeight)} cm alto</span>
+            <span>{formatNumber(result.metrics.weightPercent, 1)}% peso</span>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="manual-grid">
+        <TextField label="SKU" value={form.sku} onChange={(value) => onChange("sku", value)} />
+        <label className="field">
+          <span>Tipo</span>
+          <select className="select-input" value={form.tipo} onChange={(event) => onChange("tipo", event.target.value)}>
+            <option value="Caja">Caja</option>
+            <option value="Cilindro">Cilindro</option>
+          </select>
+        </label>
+        <NumberField label="Largo" value={form.largo} suffix="cm" onChange={(value) => onChange("largo", value)} />
+        <NumberField
+          label={form.tipo === "Cilindro" ? "Diametro" : "Ancho"}
+          value={form.ancho}
+          suffix="cm"
+          onChange={(value) => onChange("ancho", value)}
+        />
+        <NumberField label="Alto" value={form.alto} suffix="cm" onChange={(value) => onChange("alto", value)} />
+        <NumberField label="Peso" value={form.peso} suffix="kg" onChange={(value) => onChange("peso", value)} />
+        <NumberField label="Unidades" value={form.unidades} suffix="u" step="1" onChange={(value) => onChange("unidades", value)} />
+
+        <div className="manual-actions">
+          <button className="secondary-button" type="button" onClick={onSimulate} disabled={exporting}>
+            <Play size={17} aria-hidden="true" />
+            <span>Simular</span>
+          </button>
+          <button className="primary-button" type="button" onClick={onExport} disabled={!result || exporting}>
+            <FileText size={17} aria-hidden="true" />
+            <span>Exportar PDF</span>
+          </button>
+        </div>
+      </div>
+
+      {errors.length ? (
+        <div className="manual-error">
+          <AlertTriangle size={16} aria-hidden="true" />
+          <span>{errors.join(" ")}</span>
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -131,13 +213,35 @@ function ExportProgress({ progress }) {
   );
 }
 
+function buildManualRow(form) {
+  return {
+    SKU: form.sku || "SKU_MANUAL",
+    Tipo: form.tipo,
+    Largo: form.largo,
+    Ancho: form.ancho,
+    Alto: form.alto,
+    Peso: form.peso,
+    Unidades: form.unidades,
+  };
+}
+
+function safePdfFilename(value) {
+  return `${String(value || "SKU")
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, "_")
+    .replace(/\s+/g, "_")
+    .slice(0, 80)}.pdf`;
+}
+
 export default function App() {
   const [config, setConfig] = useState(DEFAULT_CONFIG);
   const [rawRows, setRawRows] = useState([]);
   const [fileName, setFileName] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [manualForm, setManualForm] = useState(EMPTY_MANUAL_FORM);
+  const [manualRow, setManualRow] = useState(null);
   const [uploadError, setUploadError] = useState("");
   const [exporting, setExporting] = useState(false);
+  const [manualExporting, setManualExporting] = useState(false);
   const [exportError, setExportError] = useState("");
   const [exportProgress, setExportProgress] = useState(null);
 
@@ -148,10 +252,26 @@ export default function App() {
     return processRows(rawRows, config);
   }, [rawRows, config]);
 
+  const manualProcessed = useMemo(() => {
+    if (!manualRow) {
+      return { results: [], errors: [], configErrors: [] };
+    }
+    return processRows([manualRow], config);
+  }, [manualRow, config]);
+
   const safeConfig = useMemo(() => coerceConfig(config), [config]);
   const results = processed.results;
   const errors = processed.errors;
-  const selectedResult = results[selectedIndex] ?? null;
+  const manualResult = manualProcessed.results[0] ?? null;
+  const manualErrors = useMemo(() => {
+    if (!manualRow) return [];
+    return [
+      ...(manualProcessed.configErrors ?? []),
+      ...manualProcessed.errors.map((error) => error.reason),
+    ];
+  }, [manualProcessed, manualRow]);
+  const viewerResults = useMemo(() => (manualResult ? [manualResult, ...results] : results), [manualResult, results]);
+  const selectedResult = viewerResults[selectedIndex] ?? null;
   const summaryRows = useMemo(() => results.map(resultToSummaryRow), [results]);
   const errorRows = useMemo(
     () =>
@@ -172,13 +292,24 @@ export default function App() {
       : 0;
     return { units, maxUnits, averageWeight };
   }, [results]);
+  const exportBusy = exporting || manualExporting;
 
   useEffect(() => {
-    if (selectedIndex > results.length - 1) setSelectedIndex(Math.max(0, results.length - 1));
-  }, [results.length, selectedIndex]);
+    if (selectedIndex > viewerResults.length - 1) setSelectedIndex(Math.max(0, viewerResults.length - 1));
+  }, [viewerResults.length, selectedIndex]);
 
   function updateConfig(key, value) {
     setConfig((current) => ({ ...current, [key]: value }));
+  }
+
+  function updateManualForm(key, value) {
+    setManualForm((current) => ({ ...current, [key]: value }));
+    setManualRow(null);
+  }
+
+  function handleManualSimulate() {
+    setManualRow(buildManualRow(manualForm));
+    setSelectedIndex(0);
   }
 
   async function handleFileChange(event) {
@@ -209,7 +340,7 @@ export default function App() {
   }
 
   async function handleDownloadZip() {
-    if (!results.length || exporting) return;
+    if (!results.length || exportBusy) return;
     setExporting(true);
     setExportError("");
     setExportProgress({
@@ -243,7 +374,7 @@ export default function App() {
   }
 
   async function handleDownloadExcel() {
-    if (!results.length || exporting) return;
+    if (!results.length || exportBusy) return;
     setExporting(true);
     setExportError("");
     setExportProgress({
@@ -275,14 +406,47 @@ export default function App() {
     }
   }
 
+  async function handleManualExportPdf() {
+    if (!manualResult || exportBusy) return;
+    setManualExporting(true);
+    setExportError("");
+    setExportProgress({
+      phase: "Preparando PDF",
+      current: 0,
+      total: 1,
+      percent: 0,
+      label: `Generando ${manualResult.sku}`,
+    });
+
+    try {
+      const { createSkuPdf, downloadBlob } = await import("./utils/exporters.js");
+      const buffer = await createSkuPdf(manualResult, safeConfig);
+      const blob = new Blob([buffer], { type: "application/pdf" });
+      downloadBlob(blob, safePdfFilename(manualResult.sku));
+      setExportProgress({
+        phase: "Listo",
+        current: 1,
+        total: 1,
+        percent: 100,
+        label: "PDF descargado",
+      });
+      window.setTimeout(() => setExportProgress(null), 1800);
+    } catch (error) {
+      setExportError(error.message || "No se pudo generar el PDF.");
+      setExportProgress(null);
+    } finally {
+      setManualExporting(false);
+    }
+  }
+
   function goToPrevious() {
-    if (!results.length) return;
-    setSelectedIndex((current) => (current - 1 + results.length) % results.length);
+    if (!viewerResults.length) return;
+    setSelectedIndex((current) => (current - 1 + viewerResults.length) % viewerResults.length);
   }
 
   function goToNext() {
-    if (!results.length) return;
-    setSelectedIndex((current) => (current + 1) % results.length);
+    if (!viewerResults.length) return;
+    setSelectedIndex((current) => (current + 1) % viewerResults.length);
   }
 
   return (
@@ -366,7 +530,7 @@ export default function App() {
               className="secondary-button"
               type="button"
               onClick={handleDownloadExcel}
-              disabled={!results.length || exporting}
+              disabled={!results.length || exportBusy}
               title="Descargar solo Excel"
             >
               <FileSpreadsheet size={18} aria-hidden="true" />
@@ -376,7 +540,7 @@ export default function App() {
               className="primary-button"
               type="button"
               onClick={handleDownloadZip}
-              disabled={!results.length || exporting}
+              disabled={!results.length || exportBusy}
               title="Descargar resultados"
             >
               <Download size={18} aria-hidden="true" />
@@ -397,6 +561,16 @@ export default function App() {
           <MetricCard icon={Weight} label="Peso promedio" value={`${formatNumber(totals.averageWeight, 1)}%`} detail="ocupacion del limite" />
         </section>
 
+        <ManualSkuPanel
+          form={manualForm}
+          result={manualResult}
+          errors={manualErrors}
+          exporting={exportBusy}
+          onChange={updateManualForm}
+          onSimulate={handleManualSimulate}
+          onExport={handleManualExportPdf}
+        />
+
         <section className="work-grid">
           <div className="viewer-panel">
             <div className="panel-header">
@@ -405,26 +579,26 @@ export default function App() {
                 <p>{selectedResult ? `${selectedResult.sku} - ${selectedResult.typeLabel}` : "Sin SKU seleccionado"}</p>
               </div>
               <div className="viewer-actions">
-                <button className="icon-button" type="button" onClick={goToPrevious} disabled={!results.length} title="Anterior">
+                <button className="icon-button" type="button" onClick={goToPrevious} disabled={!viewerResults.length} title="Anterior">
                   <ChevronLeft size={18} aria-hidden="true" />
                 </button>
                 <select
                   value={selectedIndex}
                   onChange={(event) => setSelectedIndex(Number(event.target.value))}
-                  disabled={!results.length}
+                  disabled={!viewerResults.length}
                   aria-label="Seleccionar SKU"
                 >
-                  {results.length ? (
-                    results.map((result, index) => (
-                      <option value={index} key={result.id}>
-                        {result.sku}
+                  {viewerResults.length ? (
+                    viewerResults.map((result, index) => (
+                      <option value={index} key={`${result.id}-${index}`}>
+                        {index === 0 && manualResult ? `${result.sku} (manual)` : result.sku}
                       </option>
                     ))
                   ) : (
                     <option value={0}>Sin resultados</option>
                   )}
                 </select>
-                <button className="icon-button" type="button" onClick={goToNext} disabled={!results.length} title="Siguiente">
+                <button className="icon-button" type="button" onClick={goToNext} disabled={!viewerResults.length} title="Siguiente">
                   <ChevronRight size={18} aria-hidden="true" />
                 </button>
               </div>

@@ -40,6 +40,14 @@ function yieldToBrowser() {
   });
 }
 
+async function releaseExportMemory() {
+  await yieldToBrowser();
+  if (typeof window !== "undefined" && typeof window.gc === "function") {
+    window.gc();
+  }
+  await yieldToBrowser();
+}
+
 async function emitProgress(onProgress, progress) {
   if (typeof onProgress === "function") onProgress(progress);
   await yieldToBrowser();
@@ -187,7 +195,7 @@ function drawDimensionPage(doc, result) {
   doc.text(`Unidades reportadas: ${Number.isFinite(item.unidades) ? formatNumber(item.unidades, 0) : "0"}`, margin, 594);
 }
 
-async function createSkuPdf(result, config) {
+export async function createSkuPdf(result, config) {
   const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
   const pageWidth = doc.internal.pageSize.getWidth();
   const margin = 42;
@@ -208,7 +216,7 @@ async function createSkuPdf(result, config) {
   doc.setTextColor("#475569");
   doc.text(`Orientacion: ${result.orientation} | Desborde: ${result.layout.usedOverhang ? "Si" : "No"}`, margin, 78);
 
-  const image = await capturePalletImage(result, config, {
+  let image = await capturePalletImage(result, config, {
     width: 1100,
     height: 760,
     mimeType: "image/png",
@@ -216,8 +224,10 @@ async function createSkuPdf(result, config) {
     showProductEdges: true,
     showSlats: true,
     cylinderSegments: 48,
+    edgeInstanceLimit: 900,
   });
   doc.addImage(image, "PNG", margin, 98, pageWidth - margin * 2, 292);
+  image = null;
 
   doc.setFontSize(10);
   doc.setTextColor("#111827");
@@ -249,7 +259,9 @@ async function createSkuPdf(result, config) {
   }
 
   drawDimensionPage(doc, result);
-  return doc.output("arraybuffer");
+  const pdfBuffer = doc.output("arraybuffer");
+  await releaseExportMemory();
+  return pdfBuffer;
 }
 
 export async function createResultsZip(results, errors, config, options = {}) {
@@ -282,9 +294,10 @@ export async function createResultsZip(results, errors, config, options = {}) {
       percent: Math.round((index / Math.max(results.length, 1)) * 90) + 5,
       label: `PDF ${index + 1} de ${results.length}: ${result.sku}`,
     });
-    const pdfBuffer = await createSkuPdf(result, config);
+    let pdfBuffer = await createSkuPdf(result, config);
     zip.file(`${sanitizeFilename(result.sku)}.pdf`, pdfBuffer);
-    await yieldToBrowser();
+    pdfBuffer = null;
+    await releaseExportMemory();
   }
 
   await emitProgress(onProgress, {
@@ -370,7 +383,7 @@ export async function createResultsZipChunks(results, errors, config, options = 
       label: `${filename} descargado`,
     });
 
-    await yieldToBrowser();
+    await releaseExportMemory();
   }
 
   await emitProgress(onProgress, {

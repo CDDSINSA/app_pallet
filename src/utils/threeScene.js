@@ -15,6 +15,26 @@ function addEdges(mesh, color = "#1f2937") {
   return line;
 }
 
+function addOutlineBox(scene, bounds, color = "#1f2937") {
+  const width = Math.max(0.01, bounds.maxX - bounds.minX);
+  const height = Math.max(0.01, bounds.maxY - bounds.minY);
+  const depth = Math.max(0.01, bounds.maxZ - bounds.minZ);
+  const geometry = new THREE.BoxGeometry(width, height, depth);
+  const edges = new THREE.EdgesGeometry(geometry, 20);
+  geometry.dispose();
+
+  const line = new THREE.LineSegments(
+    edges,
+    new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.72 }),
+  );
+  line.position.set(
+    (bounds.minX + bounds.maxX) / 2,
+    (bounds.minY + bounds.maxY) / 2,
+    (bounds.minZ + bounds.maxZ) / 2,
+  );
+  scene.add(line);
+}
+
 function disposeObject(object) {
   object.traverse((child) => {
     if (child.geometry) child.geometry.dispose();
@@ -26,6 +46,36 @@ function disposeObject(object) {
       }
     }
   });
+}
+
+function getLayerBounds(positions, config) {
+  const baseHeight = Math.max(3, config.palletBaseHeight);
+  const layers = new Map();
+
+  positions.forEach((position) => {
+    const key = `${position.layer}|${position.z}|${position.alto}`;
+    const minX = position.x - config.palletLength / 2;
+    const maxX = position.x + position.largo - config.palletLength / 2;
+    const minZ = position.y - config.palletWidth / 2;
+    const maxZ = position.y + position.ancho - config.palletWidth / 2;
+    const minY = baseHeight + position.z;
+    const maxY = baseHeight + position.z + position.alto;
+
+    if (!layers.has(key)) {
+      layers.set(key, { minX, maxX, minY, maxY, minZ, maxZ });
+      return;
+    }
+
+    const bounds = layers.get(key);
+    bounds.minX = Math.min(bounds.minX, minX);
+    bounds.maxX = Math.max(bounds.maxX, maxX);
+    bounds.minY = Math.min(bounds.minY, minY);
+    bounds.maxY = Math.max(bounds.maxY, maxY);
+    bounds.minZ = Math.min(bounds.minZ, minZ);
+    bounds.maxZ = Math.max(bounds.maxZ, maxZ);
+  });
+
+  return Array.from(layers.values());
 }
 
 export function getSceneBounds(result, config) {
@@ -107,12 +157,15 @@ function addProducts(scene, result, config, options = {}) {
   const baseHeight = Math.max(3, config.palletBaseHeight);
   const showEdges = options.showProductEdges !== false;
   const cylinderSegments = options.cylinderSegments ?? 48;
-  const useInstancing = options.useInstancing !== false && !showEdges;
+  const positions = result.positions ?? [];
+  const edgeInstanceLimit = options.edgeInstanceLimit ?? 900;
+  const useInstancing =
+    options.useInstancing === true || (options.useInstancing !== false && (!showEdges || positions.length > edgeInstanceLimit));
 
   if (useInstancing) {
     const groups = new Map();
 
-    result.positions.forEach((position) => {
+    positions.forEach((position) => {
       const color = position.isCylinder ? "#ef705d" : BOX_COLORS[position.layer % BOX_COLORS.length];
       const key = [
         position.isCylinder ? "cylinder" : "box",
@@ -154,10 +207,14 @@ function addProducts(scene, result, config, options = {}) {
       mesh.instanceMatrix.needsUpdate = true;
       scene.add(mesh);
     });
+
+    if (showEdges) {
+      getLayerBounds(positions, config).forEach((bounds) => addOutlineBox(scene, bounds));
+    }
     return;
   }
 
-  result.positions.forEach((position) => {
+  positions.forEach((position) => {
     const color = position.isCylinder ? "#ef705d" : BOX_COLORS[position.layer % BOX_COLORS.length];
     const material = new THREE.MeshStandardMaterial({
       color,
@@ -260,6 +317,8 @@ export async function capturePalletImage(result, config, options = {}) {
     showGrid: options.showGrid ?? true,
     showHeightGuide: options.showHeightGuide ?? true,
     cylinderSegments: options.cylinderSegments ?? 24,
+    useInstancing: options.useInstancing,
+    edgeInstanceLimit: options.edgeInstanceLimit,
   });
   const camera = new THREE.PerspectiveCamera(35, width / height, 0.1, 10000);
   configureCamera(camera, bounds, { distanceScale: options.distanceScale ?? 1.1 });

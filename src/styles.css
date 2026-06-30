@@ -375,6 +375,101 @@ button {
   margin-top: 3px;
 }
 
+.manual-panel {
+  min-width: 0;
+  padding: 15px;
+  margin-bottom: 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.manual-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.manual-panel h2 {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.25;
+}
+
+.manual-panel p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.manual-mini-stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.manual-mini-stats span {
+  padding: 7px 9px;
+  color: #334155;
+  font-size: 0.78rem;
+  font-weight: 700;
+  background: #f8fafc;
+  border: 1px solid #e5eaf0;
+  border-radius: 8px;
+}
+
+.manual-grid {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.35fr) minmax(116px, 0.8fr) repeat(5, minmax(108px, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.manual-grid .field {
+  margin-top: 0;
+}
+
+.select-input {
+  width: 100%;
+  height: 38px;
+  padding: 0 10px;
+  color: var(--ink);
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.manual-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.manual-actions .secondary-button,
+.manual-actions .primary-button {
+  width: auto;
+  min-width: 128px;
+  margin-top: 0;
+  padding: 0 14px;
+}
+
+.manual-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 11px;
+  color: #7a2e0e;
+  font-size: 0.84rem;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+}
+
 .work-grid {
   display: grid;
   grid-template-columns: minmax(430px, 1.12fr) minmax(390px, 0.88fr);
@@ -579,6 +674,10 @@ tbody tr:nth-child(even) {
   .work-grid {
     grid-template-columns: 1fr;
   }
+
+  .manual-grid {
+    grid-template-columns: repeat(4, minmax(120px, 1fr));
+  }
 }
 
 @media (max-width: 760px) {
@@ -594,9 +693,23 @@ tbody tr:nth-child(even) {
   }
 
   .app-header,
-  .panel-header {
+  .panel-header,
+  .manual-panel-head {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .manual-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .manual-actions {
+    justify-content: stretch;
+  }
+
+  .manual-actions .secondary-button,
+  .manual-actions .primary-button {
+    width: 100%;
   }
 
   .title-block h1 {
