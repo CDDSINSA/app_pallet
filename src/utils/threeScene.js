@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { getBounds } from "./palletLogic.js";
 
 const BOX_COLORS = ["#6bb8e8", "#8bd17c", "#f2bf5e", "#ef826d", "#9f91e8", "#5ec1ad"];
 
@@ -35,21 +36,22 @@ function addOutlineBox(scene, bounds, color = "#1f2937") {
   scene.add(line);
 }
 
-function disposeObject(object) {
+export function disposeObject(object) {
+  const geometries = new Set();
+  const materials = new Set();
   object.traverse((child) => {
-    if (child.geometry) child.geometry.dispose();
+    if (child.isInstancedMesh) child.dispose();
+    if (child.geometry) geometries.add(child.geometry);
     if (child.material) {
-      if (Array.isArray(child.material)) {
-        child.material.forEach((material) => material.dispose());
-      } else {
-        child.material.dispose();
-      }
+      for (const material of Array.isArray(child.material) ? child.material : [child.material]) materials.add(material);
     }
   });
+  geometries.forEach((geometry) => geometry.dispose());
+  materials.forEach((material) => material.dispose());
 }
 
 function getLayerBounds(positions, config) {
-  const baseHeight = Math.max(3, config.palletBaseHeight);
+  const baseHeight = config.palletBaseHeight;
   const layers = new Map();
 
   positions.forEach((position) => {
@@ -80,16 +82,11 @@ function getLayerBounds(positions, config) {
 
 export function getSceneBounds(result, config) {
   const positions = result?.positions ?? [];
-  const minX = Math.min(-config.palletLength / 2, ...positions.map((p) => p.x - config.palletLength / 2));
-  const maxX = Math.max(
-    config.palletLength / 2,
-    ...positions.map((p) => p.x + p.largo - config.palletLength / 2),
-  );
-  const minZ = Math.min(-config.palletWidth / 2, ...positions.map((p) => p.y - config.palletWidth / 2));
-  const maxZ = Math.max(
-    config.palletWidth / 2,
-    ...positions.map((p) => p.y + p.ancho - config.palletWidth / 2),
-  );
+  const bounds = result?.bounds ?? getBounds(positions, config);
+  const minX = bounds.minX - config.palletLength / 2;
+  const maxX = bounds.maxX - config.palletLength / 2;
+  const minZ = bounds.minY - config.palletWidth / 2;
+  const maxZ = bounds.maxY - config.palletWidth / 2;
   const top = Math.max(config.palletMaxHeight, result?.metrics?.finalHeight ?? config.palletMaxHeight);
 
   return {
@@ -105,7 +102,8 @@ export function getSceneBounds(result, config) {
 }
 
 function addPalletBase(scene, config, options = {}) {
-  const baseHeight = Math.max(3, config.palletBaseHeight);
+  const baseHeight = config.palletBaseHeight;
+  if (baseHeight === 0) return;
   const baseMaterial = new THREE.MeshStandardMaterial({
     color: "#9a6a3a",
     roughness: 0.72,
@@ -126,10 +124,10 @@ function addPalletBase(scene, config, options = {}) {
   for (let index = 0; index < slatCount; index += 1) {
     const z = -config.palletWidth / 2 + ((index + 0.5) * config.palletWidth) / slatCount;
     const slat = new THREE.Mesh(
-      new THREE.BoxGeometry(config.palletLength, Math.max(1.5, baseHeight * 0.12), slatWidth),
+      new THREE.BoxGeometry(config.palletLength, baseHeight * 0.12, slatWidth),
       slatMaterial,
     );
-    slat.position.set(0, baseHeight + Math.max(0.8, baseHeight * 0.06), z);
+    slat.position.set(0, baseHeight - baseHeight * 0.06, z);
     scene.add(slat);
     if (options.showEdges !== false) addEdges(slat, "#5c3b22");
   }
@@ -138,8 +136,8 @@ function addPalletBase(scene, config, options = {}) {
 function addOverhangArea(scene, result, config) {
   if (!result?.layout?.usedOverhang) return;
 
-  const width = Math.max(config.palletLength, result.layout.cols * result.layout.itemLength);
-  const depth = Math.max(config.palletWidth, result.layout.rows * result.layout.itemWidth);
+  const width = Math.max(config.palletLength, result.metrics.finalLength);
+  const depth = Math.max(config.palletWidth, result.metrics.finalWidth);
   const geometry = new THREE.PlaneGeometry(width, depth);
   const material = new THREE.MeshBasicMaterial({
     color: "#9ca3af",
@@ -154,10 +152,20 @@ function addOverhangArea(scene, result, config) {
 }
 
 function addProducts(scene, result, config, options = {}) {
-  const baseHeight = Math.max(3, config.palletBaseHeight);
+  const baseHeight = config.palletBaseHeight;
   const showEdges = options.showProductEdges !== false;
   const cylinderSegments = options.cylinderSegments ?? 48;
-  const positions = result.positions ?? [];
+  let positions = result.positions ?? [];
+
+  if (options.selectedLayer !== undefined && options.selectedLayer !== null && options.selectedLayer !== "all") {
+    const layerNum = Number(options.selectedLayer);
+    if (options.layerMode === "accumulated") {
+      positions = positions.filter((p) => p.layer <= layerNum);
+    } else {
+      positions = positions.filter((p) => p.layer === layerNum);
+    }
+  }
+
   const edgeInstanceLimit = options.edgeInstanceLimit ?? 900;
   const useInstancing =
     options.useInstancing === true || (options.useInstancing !== false && (!showEdges || positions.length > edgeInstanceLimit));
@@ -166,7 +174,7 @@ function addProducts(scene, result, config, options = {}) {
     const groups = new Map();
 
     positions.forEach((position) => {
-      const color = position.isCylinder ? "#ef705d" : BOX_COLORS[position.layer % BOX_COLORS.length];
+      const color = position.color || (position.isCylinder ? "#ef705d" : BOX_COLORS[position.layer % BOX_COLORS.length]);
       const key = [
         position.isCylinder ? "cylinder" : "box",
         color,
@@ -215,7 +223,7 @@ function addProducts(scene, result, config, options = {}) {
   }
 
   positions.forEach((position) => {
-    const color = position.isCylinder ? "#ef705d" : BOX_COLORS[position.layer % BOX_COLORS.length];
+    const color = position.color || (position.isCylinder ? "#ef705d" : BOX_COLORS[position.layer % BOX_COLORS.length]);
     const material = new THREE.MeshStandardMaterial({
       color,
       roughness: 0.48,
@@ -249,6 +257,7 @@ function addHeightGuide(scene, config) {
 }
 
 export function createPalletScene(result, config, options = {}) {
+  config = result.config ?? config;
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(options.background ?? "#f5f7fb");
 
@@ -280,15 +289,32 @@ export function createPalletScene(result, config, options = {}) {
 }
 
 export function configureCamera(camera, bounds, options = {}) {
-  const span = Math.max(bounds.widthX, bounds.widthZ, bounds.height, 120);
+  const radius = Math.max(1, Math.hypot(bounds.widthX, bounds.widthZ, bounds.height) / 2);
   const distanceScale = options.distanceScale ?? 1;
-  camera.position.set(
-    bounds.center.x + span * 0.95 * distanceScale,
-    bounds.center.y + span * 0.78 * distanceScale,
-    bounds.center.z + span * 1.2 * distanceScale,
-  );
+  const verticalFov = THREE.MathUtils.degToRad(camera.fov);
+  const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * camera.aspect);
+  const distance = (radius / Math.sin(Math.min(verticalFov, horizontalFov) / 2)) * 1.05 * distanceScale;
+
+  let dirVector;
+  switch (options.view) {
+    case "top":
+      dirVector = new THREE.Vector3(0.0001, 1, 0.0001).normalize();
+      break;
+    case "front":
+      dirVector = new THREE.Vector3(0, 0.15, 1).normalize();
+      break;
+    case "side":
+      dirVector = new THREE.Vector3(1, 0.15, 0).normalize();
+      break;
+    case "iso":
+    default:
+      dirVector = new THREE.Vector3(0.95, 0.78, 1.2).normalize();
+      break;
+  }
+
+  camera.position.copy(dirVector.multiplyScalar(distance).add(bounds.center));
   camera.near = 0.1;
-  camera.far = span * 12;
+  camera.far = distance + radius * 4;
   camera.updateProjectionMatrix();
   camera.lookAt(bounds.center);
 }
@@ -309,33 +335,34 @@ export async function capturePalletImage(result, config, options = {}) {
   }
   renderer.setSize(width, height, false);
 
-  const { scene, bounds } = createPalletScene(result, config, {
-    background: "#ffffff",
-    showProductEdges: options.showProductEdges ?? false,
-    showEdges: options.showEdges ?? true,
-    showSlats: options.showSlats ?? false,
-    showGrid: options.showGrid ?? true,
-    showHeightGuide: options.showHeightGuide ?? true,
-    cylinderSegments: options.cylinderSegments ?? 24,
-    useInstancing: options.useInstancing,
-    edgeInstanceLimit: options.edgeInstanceLimit,
-  });
-  const camera = new THREE.PerspectiveCamera(35, width / height, 0.1, 10000);
-  configureCamera(camera, bounds, { distanceScale: options.distanceScale ?? 1.1 });
-  renderer.render(scene, camera);
-  const dataUrl = renderer.domElement.toDataURL(mimeType, quality);
-
-  disposeObject(scene);
-  renderer.renderLists?.dispose?.();
-  
-  if (!options.renderer) {
-    renderer.dispose();
-    renderer.forceContextLoss();
-    renderer.domElement.width = 0;
-    renderer.domElement.height = 0;
-  } else {
-    renderer.clear();
+  let scene;
+  try {
+    const created = createPalletScene(result, config, {
+      background: "#ffffff",
+      showProductEdges: options.showProductEdges ?? false,
+      showEdges: options.showEdges ?? true,
+      showSlats: options.showSlats ?? false,
+      showGrid: options.showGrid ?? true,
+      showHeightGuide: options.showHeightGuide ?? true,
+      cylinderSegments: options.cylinderSegments ?? 24,
+      useInstancing: options.useInstancing,
+      edgeInstanceLimit: options.edgeInstanceLimit,
+    });
+    scene = created.scene;
+    const camera = new THREE.PerspectiveCamera(35, width / height, 0.1, 10000);
+    configureCamera(camera, created.bounds, { distanceScale: options.distanceScale ?? 1.1 });
+    renderer.render(scene, camera);
+    return renderer.domElement.toDataURL(mimeType, quality);
+  } finally {
+    if (scene) disposeObject(scene);
+    renderer.renderLists?.dispose?.();
+    if (!options.renderer) {
+      renderer.dispose();
+      renderer.forceContextLoss();
+      renderer.domElement.width = 0;
+      renderer.domElement.height = 0;
+    } else {
+      renderer.clear();
+    }
   }
-
-  return dataUrl;
 }

@@ -1,15 +1,10 @@
 import JSZip from "jszip";
+import { pdfFilename } from "./downloads.js";
+export { downloadBlob } from "./downloads.js";
 import { jsPDF } from "jspdf";
 import { buildSummaryWorkbook } from "./excelFiles.js";
 import { capturePalletImage } from "./threeScene.js";
 import { formatNumber, resultToSummaryRow } from "./palletLogic.js";
-
-function sanitizeFilename(value) {
-  return String(value || "SKU")
-    .replace(/[<>:"/\\|?*\x00-\x1F]/g, "_")
-    .replace(/\s+/g, "_")
-    .slice(0, 80);
-}
 
 function padIndex(value) {
   return String(value).padStart(3, "0");
@@ -196,6 +191,7 @@ function drawDimensionPage(doc, result) {
 }
 
 export async function createSkuPdf(result, config) {
+  config = result.config ?? config;
   const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
   const pageWidth = doc.internal.pageSize.getWidth();
   const margin = 42;
@@ -232,7 +228,6 @@ export async function createSkuPdf(result, config) {
   doc.setFontSize(10);
   doc.setTextColor("#111827");
   const left = margin;
-  const right = pageWidth / 2 + 14;
   let y = 430;
 
   addTextLine(doc, "Medida final", `${summary["Largo final del acomodo (cm)"]} x ${summary["Ancho final del acomodo (cm)"]} x ${summary["Alto final del acomodo (cm)"]} cm`, left, y);
@@ -243,19 +238,19 @@ export async function createSkuPdf(result, config) {
   y += 24;
   addTextLine(doc, "Ultima cama", summary["Cajas en ultima cama (incompleta)"], left, y);
 
-  y = 430;
-  addTextLine(doc, "Total por pallet", summary["Total cajas por pallet"], right, y);
   y += 24;
-  addTextLine(doc, "Peso total", `${summary["Peso total (kg)"]} kg (${summary["% peso ocupado"]})`, right, y);
+  addTextLine(doc, "Total por pallet", summary["Total cajas por pallet"], left, y);
   y += 24;
-  addTextLine(doc, "Volumen", `${summary["Volumen ocupado (cm3)"]} cm3 (${summary["% volumen ocupado"]})`, right, y);
+  addTextLine(doc, "Peso total", `${summary["Peso total (kg)"]} kg (${summary["% peso ocupado"]})`, left, y);
+  y += 24;
+  addTextLine(doc, "Volumen", `${summary["Volumen ocupado (cm3)"]} cm3 (${summary["% volumen ocupado"]})`, left, y);
 
   if (result.warnings.length) {
     doc.setTextColor("#92400e");
     doc.setFont("helvetica", "bold");
-    doc.text("Alertas:", margin, 548);
+    doc.text("Alertas:", margin, 620);
     doc.setFont("helvetica", "normal");
-    doc.text(result.warnings.join(" "), margin + 48, 548, { maxWidth: pageWidth - margin * 2 - 48 });
+    doc.text(result.warnings.join(" "), margin + 48, 620, { maxWidth: pageWidth - margin * 2 - 48 });
   }
 
   drawDimensionPage(doc, result);
@@ -278,6 +273,7 @@ export async function createResultsZip(results, errors, config, options = {}) {
 
   const workbookBuffer = await buildSummaryWorkbook(results, errors);
   zip.file("resumen_consolidado.xlsx", workbookBuffer);
+  zip.file("trazabilidad.json", JSON.stringify(results.map(({ sku, source, config, algorithmVersion, orientation, warnings, item }) => ({ sku, source, config, algorithmVersion, orientation, warnings, product: { largo: item.largo, ancho: item.ancho, alto: item.alto, peso: item.peso, unidades: item.unidades, type: item.type } })), null, 2));
   await emitProgress(onProgress, {
     phase: "Generando PDFs",
     current: 0,
@@ -295,7 +291,7 @@ export async function createResultsZip(results, errors, config, options = {}) {
       label: `PDF ${index + 1} de ${results.length}: ${result.sku}`,
     });
     let pdfBuffer = await createSkuPdf(result, config);
-    zip.file(`${sanitizeFilename(result.sku)}.pdf`, pdfBuffer);
+    zip.file(pdfFilename(result.sku, index), pdfBuffer);
     pdfBuffer = null;
     await releaseExportMemory();
   }
@@ -332,7 +328,8 @@ export async function createResultsZip(results, errors, config, options = {}) {
 }
 
 export async function createResultsZipChunks(results, errors, config, options = {}) {
-  const chunkSize = Math.max(1, options.chunkSize ?? 20);
+  const chunkSize = options.chunkSize ?? 20;
+  if (!Number.isSafeInteger(chunkSize) || chunkSize < 1) throw new Error("Tamano de lote invalido.");
   const onProgress = options.onProgress;
   const onChunkReady = options.onChunkReady;
   const totalBatches = Math.ceil(results.length / chunkSize);
@@ -372,7 +369,7 @@ export async function createResultsZipChunks(results, errors, config, options = 
     });
 
     if (typeof onChunkReady === "function") {
-      onChunkReady({ blob, filename, batchIndex, totalBatches });
+      await onChunkReady({ blob, filename, batchIndex, totalBatches });
     }
 
     await emitProgress(onProgress, {
@@ -397,13 +394,3 @@ export async function createResultsZipChunks(results, errors, config, options = 
   return { totalBatches };
 }
 
-export function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
